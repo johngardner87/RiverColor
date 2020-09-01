@@ -1,0 +1,349 @@
+---
+title: "flow_stack_analysis"
+author: "John Gardner"
+date: "April 8, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(dataRetrieval)
+library(tidyverse)
+library(sf)
+library(lubridate)
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r download_flow}
+
+gages <- st_read("D:/Dropbox/projects/TSS/data/GageLoc/GageLoc.shp")
+
+gage_ID <- whatNWISdata(siteNumber = gages$SOURCE_FEA, service = "dv",
+                            parameterCd = c("00060"))
+
+# filter to count_nu > 25 years between 1984-2018
+gage_ID2 <- gage_ID %>%
+  left_join(gages, by = c("site_no" = "SOURCE_FEA")) %>%
+  filter(begin_date < "1987-10-01" & end_date > "2018-09-30" & count_nu > 10000 ) %>%
+  mutate(COMID = FLComID)
+
+down <- list.files(path="out/usgsFlow")
+
+down_ID <- data.frame(as.list(down)) %>%
+  t() %>%
+  as.data.frame() %>%
+  separate(V1, sep="_", into=c("usgs", "site_no", "year")) %>%
+  pull(site_no)
+
+down_ID_pull <- gage_ID2 %>% filter(!site_no %in% down_ID)
+
+## download all gages
+for(i in 1:nrow(down_ID_pull)) {
+
+site <- down_ID_pull$site_no[i]
+
+sub <- down_ID_pull %>%
+  dplyr::filter(site_no==site) %>%
+  distinct(COMID, dec_lat_va, dec_long_va, huc_cd, .keep_all = T)
+
+dat <- readNWISdv(siteNumbers = site, parameterCd = "00060",
+                  startDate = "1984-10-01", endDate = "2019-09-30")
+
+if(length(dat) ==0 | nrow(dat)==0) {next} 
+
+if(any(grepl("Final", names(dat)) ==T)) {
+  
+  dat <- addWaterYear(dat) %>%
+    dplyr::rename(source = agency_cd,  date=Date, flow = X_.Final._00060_00003, 
+                  flag = X_.Final._00060_00003_cd) %>%
+    dplyr::select(source, site_no, date, waterYear, flow, flag) %>%
+    mutate(flow_cms = flow * 0.0283168,
+           COMID = sub$COMID,
+           ice_flag = ifelse(grepl("e", flag), "ice", NA),
+           station = sub$station_nm,
+           begin_date = sub$begin_date,
+           alt_va = sub$alt_va,
+           coord_datum = sub$dec_coord_datum_cd,
+           lat = sub$dec_lat_va,
+           long = sub$dec_long_va,
+           huc8 = sub$huc_cd)
+  
+  begin_date <- sub$begin_date
+  
+  write_feather(dat, paste("out/usgsFlow/", "usgs_", site,"_", begin_date, ".feather", sep="" ))
+  
+  } else if(any(grepl("Primary", names(dat)) ==T)) {
+  
+  dat <- addWaterYear(dat) %>%
+    dplyr::rename(source = agency_cd,  date=Date, flow = X_.Primary.Stream.Flow._00060_00003, 
+                  flag = X_.Primary.Stream.Flow._00060_00003_cd) %>%
+    dplyr::select(source, site_no, date, waterYear, flow, flag) %>%
+    mutate(flow_cms = flow * 0.0283168,
+           COMID = sub$COMID,
+           ice_flag = ifelse(grepl("e", flag), "ice", NA),
+           station = sub$station_nm,
+           begin_date = sub$begin_date,
+           alt_va = sub$alt_va,
+           coord_datum = sub$dec_coord_datum_cd,
+           lat = sub$dec_lat_va,
+           long = sub$dec_long_va,
+           huc8 = sub$huc_cd)
+  
+  begin_date <- sub$begin_date
+  
+  write_feather(dat, paste("out/usgsFlow/", "usgs_", site,"_", begin_date, ".feather", sep="" ))
+
+  } else if(any(grepl("Powerhouse", names(dat)) ==T)) {
+  
+  dat <- addWaterYear(dat) %>%
+    dplyr::rename(source = agency_cd,  date=Date, flow = X_Powerhouse.Releases_00060_00003, 
+                  flag = X_Powerhouse.Releases_00060_00003_cd) %>%
+    dplyr::select(source, site_no, date, waterYear, flow, flag) %>%
+    mutate(flow_cms = flow * 0.0283168,
+           COMID = sub$COMID,
+           ice_flag = ifelse(grepl("e", flag), "ice", NA),
+           station = sub$station_nm,
+           begin_date = sub$begin_date,
+           alt_va = sub$alt_va,
+           coord_datum = sub$dec_coord_datum_cd,
+           lat = sub$dec_lat_va,
+           long = sub$dec_long_va,
+           huc8 = sub$huc_cd)
+  
+  begin_date <- sub$begin_date
+  
+  write_feather(dat, paste("out/usgsFlow/", "usgs_", site,"_", begin_date, ".feather", sep="" ))
+  
+  } else if(any(grepl("Combined", names(dat)) ==T)) {
+    
+    dat <- addWaterYear(dat) %>%
+      dplyr::rename(source = agency_cd,  date=Date, flow = X_.Combined._00060_00003, 
+                    flag = X_.Combined._00060_00003_cd) %>%
+      dplyr::select(source, site_no, date, waterYear, flow, flag) %>%
+      mutate(flow_cms = flow * 0.0283168,
+             COMID = sub$COMID,
+             ice_flag = ifelse(grepl("e", flag), "ice", NA),
+             station = sub$station_nm,
+             begin_date = sub$begin_date,
+             alt_va = sub$alt_va,
+             coord_datum = sub$dec_coord_datum_cd,
+             lat = sub$dec_lat_va,
+             long = sub$dec_long_va,
+             huc8 = sub$huc_cd)
+    
+    begin_date <- sub$begin_date
+    
+    write_feather(dat, paste("out/usgsFlow/", "usgs_", site,"_", begin_date, ".feather", sep="" ))
+  } 
+
+
+else{
+  
+  dat <- addWaterYear(dat) %>%
+  dplyr::rename(source = agency_cd,  date=Date, flow = X_00060_00003, 
+                flag = X_00060_00003_cd) %>%
+  dplyr::select(source, site_no, date, waterYear, flow, flag) %>%
+  mutate(flow_cms = flow * 0.0283168,
+         COMID = sub$COMID,
+         ice_flag = ifelse(grepl("e", flag), "ice", NA),
+         station = sub$station_nm,
+         begin_date = sub$begin_date,
+         alt_va = sub$alt_va,
+         coord_datum = sub$dec_coord_datum_cd,
+         lat = sub$dec_lat_va,
+         long = sub$dec_long_va,
+         huc8 = sub$huc_cd
+         )
+
+begin_date <- sub$begin_date
+
+write_feather(dat, paste("out/usgsFlow/", "usgs_", site,"_", begin_date, ".feather", sep="" ))
+  }
+
+}
+
+```
+
+
+```{r clean_flow_WaterYear}
+
+flow_stack <- list.files(path="out/usgsFlow", pattern=".feather", full.names = T) %>%
+  map_df(~ read_feather(.))
+
+# filter NA flow
+# group by site, and count, filter ones with less 10000 Q 
+# later filter years that dont have enough data (<340)
+flow_stack <- flow_stack %>%
+  filter(!is.na(flow_cms), flow_cms >=0) %>%
+  group_by(site_no) %>%
+  mutate(n_site = n()) %>%
+  filter(n_site > 11000) %>%
+  ungroup() %>%
+  group_by(site_no, waterYear) %>%
+  mutate(n_WY = n()) %>%
+  filter(n_WY > 345) %>%
+  ungroup()
+
+# 
+flow_stack_sum <- flow_stack %>%
+  group_by(site_no) %>%
+  summarise(mean_flow_LT = mean(flow_cms, na.rm = T), 
+            median_flow_LT =median(flow_cms, na.rm=T),
+            sd_flow_LT = sd(flow_cms, na.rm = T),
+            max_flow_LT= max(flow_cms, na.rm = T),
+            Q10_flow_LT= quantile(flow_cms, probs=c(0.1) ))
+
+# join long term means and  
+flow_site_info <- flow_stack %>% 
+  distinct(site_no, .keep_all = T) %>%
+  filter(site_no %in% flow_stack_sum$site_no) %>%
+  select(site_no, source, COMID, station, begin_date, alt_va, coord_datum,
+         lat, long, huc8, n_site)
+
+#
+flow_stack_sum <- flow_stack_sum %>%
+  left_join(flow_site_info, by="site_no")
+
+#
+flow_stack_sum_yr <- flow_stack %>%
+  group_by(site_no, waterYear) %>%
+  summarise(mean_flow = mean(flow_cms, na.rm = T), 
+            median_flow =median(flow_cms, na.rm=T),
+            sd_flow = sd(flow_cms, na.rm = T),
+            max_flow = max(flow_cms, na.rm = T),
+            Q10_flow = quantile(flow_cms, probs=c(0.1) )) %>%
+  left_join(flow_stack_sum, by="site_no") %>%
+  ungroup()
+
+#write_csv(flow_stack_sum_yr %>% filter(COMID %in% flowline_full$COMID), "out/flow_stack_sum_grwl.csv")
+
+#write_feather(flow_stack_sum, "out/flow_stack_sum.feather")
+
+#write_feather(flow_stack_sum_yr, "out/flow_stack_sum_yr.feather")
+
+#write_feather(flow_stack, "out/flow_stack_clean.feather")
+```
+
+
+```{r clean_flow_calendarYear}
+#
+flow_stack_cal <- list.files(path="out/usgsFlow", pattern=".feather", full.names = T) %>%
+  map_df(~ read_feather(.))
+
+# filter NA flow
+# group by site, and count, filter ones with less 10000 Q 
+# later filter years that dont have enough data (<340)
+flow_stack_cal <- flow_stack_cal %>%
+  filter(!is.na(flow_cms), flow_cms >=0) %>%
+  mutate(year = lubridate::year(date)) %>%
+  distinct(site_no, year, date, flow_cms, .keep_all = T) %>%
+  group_by(site_no) %>%
+  mutate(n_site = n()) %>%
+  ungroup() %>%
+  group_by(site_no, year) %>%
+  mutate(n_year = n()) %>%
+  filter(n_year > 345) %>%
+  ungroup()
+
+# 
+flow_stack_sum_yr <- flow_stack_cal %>%
+  group_by(site_no, year) %>%
+  summarise(mean_flow = mean(flow_cms, na.rm = T), 
+            median_flow =median(flow_cms, na.rm=T),
+            sd_flow = sd(flow_cms, na.rm = T),
+            max_flow = max(flow_cms, na.rm = T),
+            Q10_flow = quantile(flow_cms, probs=c(0.1) ),
+            Q90_flow = quantile(flow_cms, probs=c(0.9)),
+            count_year = n_year[1]) %>%
+  left_join(flow_stack_sum, by="site_no") %>%
+  ungroup()
+
+#write_feather(flow_stack_sum_yr, "out/flow_stack_sum_cal_yr.feather")
+
+#write_feather(flow_stack_cal, "out/flow_stack_cal.feather")
+
+#write_feather(flow_stack_cal %>%
+#filter(COMID %in% flowline_full$COMID), "out/flow_stack_grwl_cal.feather")
+
+#write_csv(flow_stack_sum_yr, "out/flow_stack_sum_cal.csv")
+
+#write_csv(flow_stack_cal, "out/flow_stack_cal.txt")
+
+#write_csv(flow_stack_cal %>% filter(COMID %in% flowline_full$COMID), "out/flow_stack_grwl_cal.txt")
+
+```
+
+
+
+```{r median_flow_regime}
+
+#
+flow_stack_portion <-  flow_stack %>%
+  filter(COMID %in% flowline_full$COMID) %>%
+  mutate(year = lubridate::year(date),
+         month = lubridate::month(date)) %>%
+  group_by(site_no, year, month ) %>%
+  mutate(n=n()) %>%
+  filter(n > 26) %>%
+  summarise(month_flow=sum(flow_cms)) %>%
+  ungroup() %>%
+  left_join(flow_stack %>%
+              filter(COMID %in% flowline_full$COMID) %>%
+              mutate(year = lubridate::year(date),
+                     month = lubridate::month(date)) %>%
+              group_by(site_no, year ) %>%
+              mutate(n=n()) %>%
+              filter(n>350) %>%
+              summarise(annual_flow = sum(flow_cms)) %>%
+              ungroup(), by=c("site_no", "year")) %>%
+  mutate(flow_prop = month_flow/annual_flow)
+
+# calculate mean and median flow proportion for each site
+flow_prop_sum <- flow_stack_portion %>%
+  group_by(site_no, month) %>%
+  summarise_at(vars(month_flow, flow_prop), list(~mean(., na.rm=T),~median(., na.rm = T), ~sd(.,na.rm=T))) %>%
+  ungroup() %>%
+  mutate(flow_prop_cv = flow_prop_sd/flow_prop_mean,
+         month_flow_cv = month_flow_sd/month_flow_mean) %>%
+  left_join(flow_site_info, by="site_no")
+  
+
+# next mean and median of mean and medians by color pattern
+#write_csv(flow_stack_portion, "D:/Dropbox/projects/riverTSS/out/flow_stack_monthly_prop.csv")
+
+#write_csv(flow_prop_sum, "D:/Dropbox/projects/riverTSS/out/flow_stack_monthly_prop_sum.csv")
+
+ggplot(flow_stack_annual %>% filter(flow_stack_annual$site_no %in% unique(flow_stack_annual$site_no)[1:5])) +
+  geom_point(aes(x=year, y=annual_flow)) +
+  facet_wrap(~site_no, scales="free")
+
+ggplot(flow_stack_portion %>% filter(flow_stack_portion$site_no %in% unique(flow_stack_portion$site_no)[1:5])) +
+  geom_line(aes(x=month, y=month_flow, group=year, color=year)) +
+  scale_color_viridis_c() +
+  facet_wrap(~site_no, scales="free")
+
+
+ggplot(flow_stack_portion %>% filter(flow_stack_portion$site_no %in% unique(flow_stack_portion$site_no)[710:730])) +
+  geom_line(aes(x=month, y=flow_prop,group=year, color=year)) +
+  scale_color_viridis_c() +
+  facet_wrap(~site_no, scales="free") +
+  theme_bw()
+
+###
+ggplot(flow_prop_sum %>% filter(flow_prop_sum$site_no %in% unique(flow_prop_sum$site_no)[1:40])) +
+  geom_smooth(aes(x=month, y=flow_prop_mean), color="black") +
+  geom_smooth(aes(x=month, y=flow_prop_median), color="red") +
+  facet_wrap(~site_no, scales="free") +
+  theme_bw()
+
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

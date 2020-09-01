@@ -1,0 +1,551 @@
+---
+title: "color_analysis"
+author: "John Gardner"
+date: "January 2, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(stringr)
+library(tidyverse)
+library(feather)
+library(viridis)
+library(knitr)
+library(sf)
+library(rgdal)
+library(maps)
+library(magrittr)
+library(purrr)
+library(data.table)
+library(tmap)
+library(readr)
+library(lubridate)
+library(modeest)
+library(mapview)
+library(ggthemes)
+library(furrr) # parallel map functioning!
+library(mapview)
+library(modes)
+library(leaflet)
+library(tidyr)
+library(lubridate)
+library(leafpop)
+library(maps)
+library(USAboundaries)
+library(pavo)
+library(scales)
+library(leaflet.extras)
+library(USAboundaries)
+library(maps)
+
+knitr::opts_chunk$set(echo = TRUE)
+
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+## plot modal color
+
+# load data
+nhdplusTools::nhdplus_path("D:/projects/TSS/data/NHDPlusNationalData/NHDPlusV21_National_Seamless_Flattened_Lower48.gdb")
+
+nhd_paths <- nhdplusTools::stage_national_data(output_path = 'D:/projects/TSS/data/NHDPlusNationalData')
+
+nhd_all <- readRDS(nhd_paths$flowline) %>%
+  filter(!FTYPE %in% c("Coastline", "Pipeline")) %>%
+  filter(StreamOrde == StreamCalc) %>% 
+  #filter(StreamOrde > 2) %>%
+  select(-contains("_0")) %>%
+  select(-contains("_1")) 
+
+#lakes <- sf::st_read(dsn="D:/projects/TSS/data/NHDPlusNationalData/NHDPlusV21_National_Seamless_Flattened_Lower48.gdb", layer = "NHDWaterbody") 
+
+#
+sum_ID <- read_feather("D:/Dropbox/projects/rivercolor/out/sr_sum_ID.feather")
+
+
+flowline <- st_read('D:/GIS/river_networks/nhd_grwl_collapse_20191002.shp')  %>%
+  st_transform(2163)
+
+
+flowline_sum <- flowline %>%
+  inner_join(sum_ID, by="ID") %>%
+  filter(!ID %in% flag_reaches$ID) %>%
+  mutate(bimodal = ifelse(dw_bi_coef > 0.54 & is.finite(dw_antimode) & !is.na(dw_mode2), "bimodal", "unimodal")) %>%
+  mutate(type = ifelse(is.na(LakFrct), "River", "Lake"))
+
+# calculate modal hue for each reach
+calc_mode <- function(x) {
+  uniqx <- unique(x)
+  uniqx[which.max(tabulate(match(x, uniqx)))]
+}
+
+hex <- sr_clean_all %>%
+  filter(Cloud_Cover < 50) %>%
+  #filter(ID %in% 10000:18005) %>%
+  filter_at(vars(red, green, blue), all_vars(. < 2000)) %>%
+  mutate(hex = rgb(r=red, g=green, b=blue, max = 2000)) %>%
+  group_by(ID) %>%
+  summarise(hex_mode = calc_mode(hex))
+
+# join to sumID and flowline
+flowline_hex <- flowline %>% inner_join(hex, by="ID")  
+
+usa <- st_as_sf(map('usa', plot = FALSE, fill = TRUE)) %>%
+  st_combine() %>%
+  st_transform(102003)
+
+
+reservoir <- flowline %>% dplyr::filter(!is.na(LakFrct))
+
+```
+
+
+
+```{r}
+flowline_sum %>%
+  st_set_geometry(NULL) %>%
+  mutate(bimodal = ifelse(dw_bi_coef > 0.54 &  is.finite(dw_antimode) & !is.na(dw_mode2), "bimodal", "unimodal")) %>%
+  group_by(bimodal) %>%
+  summarise(length=sum(LENGTHK)) %>%
+  mutate(total_length = sum(length),
+            perc=length/total_length)
+
+flowline_clust %>% 
+  st_set_geometry(NULL) %>%
+  group_by(cluster_3) %>%
+  filter(!is.na(cluster_3)) %>%
+  summarise(length= sum(LENGTHK)) %>%
+  mutate(total_length = sum(length),
+            perc=length/total_length)
+
+# # reaches 
+sum_ID %>%
+  inner_join(flowline %>%
+            mutate(Type = ifelse(is.na(LakFrct), "River", "Lake"),
+                   total_length=sum(LENGTHK)) %>%
+              group_by(Type) %>%
+              mutate(total_length_type = sum(LENGTHK)) %>%
+              ungroup(), by="ID") %>%
+  #st_set_geometry(NULL) %>%
+  group_by(Type) %>%
+  summarise(n=n()) 
+
+
+sum_ID %>%
+  inner_join(flowline %>%
+            mutate(Type = ifelse(is.na(LakFrct), "River", "Lake"),
+                   total_length=sum(LENGTHK)), by='ID') %>%
+   group_by(Type) %>%
+   summarise(length = sum(LENGTHK)) %>%
+   mutate(total_length = sum(length),
+            perc=length/total_length)
+
+
+
+
+
+```
+
+
+```{r trends}
+# trends in dw
+trends_dw <- read_feather('D:/Dropbox/projects/rivercolor/out/trends_dw_all.feather')
+
+
+flowline_trend <- flowline %>%
+  inner_join(trends_dw, by = "ID") %>%
+  left_join(sum_ID, by="ID") %>%
+  mutate(bimodal = ifelse(dw_bi_coef > 0.54 & is.finite(dw_antimode) & !is.na(dw_mode2), "bimodal", "unimodal")) %>%
+  mutate(type = ifelse(is.na(LakFrct), "River", "Lake")) %>%
+  mutate(constant_color = case_when(
+         green_frac == 1 ~"green",
+         yellow_frac == 1 ~ "yellow",
+         blue_frac ==1 ~ "blue",
+         TRUE ~ "variable"
+         )) %>%
+   mutate(trend = ifelse(is.na(trend) & (dw_sd/dw_mean) <=0.01, "stable", trend )) %>%
+   mutate(trend = ifelse(is.na(trend) & (dw_sd/dw_mean) >0.01, "unstable", trend )) %>%
+  mutate(cv_sum = dw_sd/dw_mean)
+
+
+# 11% rivers always in yellow range
+flowline_trend %>%
+  st_set_geometry(NULL) %>%
+  group_by(bimodal) %>%
+  summarise(count =n(), sumLength = sum(LENGTHK)) 
+
+#lakes slightly more likely to be bimodal
+flowline_trend %>%
+  st_set_geometry(NULL) %>%
+  group_by( type, bimodal) %>%   #trend
+  summarise(count =n()) %>%
+  mutate(total_count = sum(count),
+         perc_mod = count/total_count)
+
+flowline_trend %>%
+  st_set_geometry(NULL) %>%
+  filter(bimodal == "unimodal") %>%
+  group_by( type, trend) %>%   #trend
+  summarise(count =n()) %>%
+  mutate(total_count = sum(count),
+         perc_mod = count/total_count)
+
+long_trends<- flowline_trend %>%
+  st_set_geometry(NULL) %>%
+  group_by(type ,trend) %>%   #trend
+    summarise(count =n(), sum_length = sum(LENGTHK)) %>%
+  mutate(total_count = sum(count),
+         total_length = sum(sum_length),
+         perc = count/total_count,
+         perc_length = sum_length/total_length) %>%
+  mutate(trend_analysis="long_term")
+
+#write_csv(long_trends, "D:/Dropbox/projects/rivercolor/out/table_long_trends.csv")
+
+
+ggplot() +
+geom_point(data=sr_clean_all %>% filter(ID %in% c(26739, 29850, 29793, 24710)) %>%
+             left_join(flowline %>%
+                         dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID") %>%
+             mutate(GNIS_NA = case_when(
+               ID == 26739 ~ "DMF Brazos",
+               ID == 29850 ~ "Lake Mead",
+               ID == 29793 ~ "Colorado",
+               ID == 24710 ~ "Canadian"
+             )),
+             aes(x=date, y=dw), color="grey") +
+  geom_point(data=sum_ID_decade %>% filter(ID %in% c(26739, 29850, 29793,24710)) %>%
+               left_join(flowline %>%
+                        dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID") %>%
+             mutate(GNIS_NA = case_when(
+               ID == 26739 ~ "DMF Brazos",
+               ID == 29850 ~ "Lake Mead",
+               ID == 29793 ~ "Colorado",
+               ID == 24710 ~ "Canadian"
+             )),
+             aes(x=as.Date(paste(as.character(decade), 6, 1, sep = "-")), y=dw_mean, color=GNIS_NA ), size=5)  +
+  scale_color_manual(values = c("dodgerblue", "gray20", "green3", "gold")) +
+  scale_x_date(breaks = as.Date(c("1985-01-01", "2000-01-01", "2015-01-01")),
+               date_labels = "%Y") +
+  geom_hline(yintercept = 560) +
+  theme_few() +
+  ylab(expression(lambda~(nm))) +
+  xlab("") +
+  theme(legend.position= "none",
+        text = element_text(size=26)) +
+  facet_wrap(~GNIS_NA, nrow=4, ncol=1, scales="free_y")
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/dw_ts_4trends.png", width= 4,
+        height=8, units="in", dpi=300)
+
+###
+flowline_trend %>%
+  st_set_geometry(NULL) %>%
+ # mutate(total_length = sum(LENGTHK)) %>%
+  group_by(trend) %>%   #trend
+  summarise(count =n(), sum_length = sum(LENGTHK)) %>%
+  mutate(total_count = sum(count),
+         total_length = sum(sum_length),
+         perc = count/total_count,
+         perc_length = sum_length/total_length) %>%
+  mutate(trend_analysis="long_term")
+
+```
+
+
+```{r urban_areas}
+
+# Read in urba nareas boundaries from US census
+# https://www.census.gov/geographies/mapping-files/time-series/geo/carto-boundary-file.html
+cb <- st_read("D:/GIS/Census/cb_2018_us_ua10_500k.shp") %>%
+  arrange(GEOID10) %>%
+  st_transform(crs=5070)
+
+# intersect urban areas with close_dams
+flowline_urban <- flowline %>%
+  st_transform(5070) %>%
+  st_buffer(dist=300, endCapStyle="FLAT") %>%
+  st_join(cb, largest=T) %>%
+  mutate(urban = ifelse(is.na(NAME10),"not","urban"))
+
+## write to file
+# write_feather(flowline_urban %>%
+#                st_set_geometry(NULL),"D:/Dropbox/projects/rivercolor/out/flowline_urban_intersect.feather")
+
+## Spot check
+# mapview(cb, color= "grey")+
+# mapview(flowline_urban, zcol="urban") 
+
+
+```
+
+
+```{r distance_from_dam}
+# calcualte distance up/down stream of trending reaches to lake
+# distance vs senslope as histograms by sen rank or point
+
+stream_cat_grwl <- read_feather()
+
+# brute force way
+flowline_dam <- dams %>%
+  st_set_geometry(NULL) %>%
+  left_join(nhd_all %>%
+              st_set_geometry(NULL), by="COMID")
+##
+ID_dm <- read_feather("D:/Dropbox/projects/riverTSS/out/COMID_dm_grwl.feather")
+
+ID_up <- read_feather("D:/Dropbox/projects/riverTSS/out/COMID_up_grwl.feather")
+
+##
+close_dams_ls <- list()
+
+for(i in 1:nrow(flowline_test)) {
+  
+  x <- flowline_test %>%
+    slice(i) 
+  
+  up_ID <- ID_up %>%
+    filter(COMID == x$COMID)
+    
+  down_ID <- ID_dm %>%
+    filter(COMID == x$COMID)
+    
+  up_1 <- flowline_dam %>% 
+    rename(COMID_dam = COMID) %>%
+    filter(COMID_dam %in% up_ID$COMID_UP ) %>%
+    mutate(dist = Pathlength - (x$Pthlngt-(x$LENGTHK/2))) %>%
+    filter(dist == min(dist, na.rm=T)) %>%
+    mutate(sum_na = rowSums(is.na(.))) %>%
+    slice(which.min(sum_na)) %>%
+    mutate(dam_location = "upstream",
+           up_dam = "grwl")
+  
+if(plyr::empty(up_1)==TRUE) {
+  
+  up_ID_nhd <- nhdplusTools::get_UM(nhd_all,  comid=x$COMID)
+  
+  up <- flowline_dam %>% 
+    rename(COMID_dam = COMID) %>%
+    filter(COMID_dam %in% up_ID_nhd ) %>%
+    mutate(dist = Pathlength - (x$Pthlngt-(x$LENGTHK/2))) %>%
+    filter(dist == min(dist, na.rm=T)) %>%
+    mutate(sum_na = rowSums(is.na(.))) %>%
+    slice(which.min(sum_na)) %>%
+    mutate(dam_location = "upstream",
+           up_dam="up_mainstem")
+  
+  } else{up <- up_1}
+  
+if(plyr::empty(up)==TRUE) {
+  
+  up_ID_nhd_T <- nhdplusTools::get_UT(nhd_all,  comid=x$COMID)
+  
+  up <- flowline_dam %>% 
+    rename(COMID_dam = COMID) %>%
+    filter(COMID_dam %in% up_ID_nhd_T ) %>%
+    mutate(dist = Pathlength - (x$Pthlngt-(x$LENGTHK/2))) %>%
+    filter(Hydroseq==min(Hydroseq)) %>%
+    mutate(sum_na = rowSums(is.na(.))) %>%
+    slice(which.min(sum_na)) %>%
+    mutate(dam_location = "upstream",
+           up_dam="up_trib")
+}
+
+###
+  down <- flowline_dam %>% 
+    rename(COMID_dam = COMID) %>%
+    filter(COMID_dam %in% down_ID$COMID_DN ) %>%
+    mutate(dist = Pathlength - (x$Pthlngt-(x$LENGTHK/2))) %>%
+    #arrange(dist) %>%
+    filter(abs(dist) == min(abs(dist), na.rm=T)) %>%
+    mutate(sum_na = rowSums(is.na(.))) %>%
+    slice(which.min(sum_na)) %>%
+    mutate(dam_location = "downstream")
+  
+  out_1 <-bind_rows(up, down) %>%
+    mutate(COMID= x$COMID, ID=x$ID, sen=x$sen, sen_norm=x$sen_norm, sen_rank = x$sen_rank, trend=x$trend, tau = x$tau) %>%
+    dplyr::select(ID, COMID, dist, dam_location, up_dam, sen, sen_rank, sen_norm, tau, trend, COMMENT:Spill_wid) 
+  
+  
+if(plyr::empty(out_1)) { out <-out_1
+
+} else if(nrow(out_1)==1 & out_1$dam_location=="upstream") {
+  
+  bind<-tibble(dam_location="downstream")
+  out <- bind_rows(out_1, bind)
+  
+ } else if(nrow(out_1)==1 & out_1$dam_location=="downstream") {
+   
+    bind<-tibble(dam_location="upstream")
+    out <- bind_rows(out_1, bind)
+    
+   # } else if(plyr::ise)
+  
+  } else{
+      out <- out_1
+}
+  
+  close_dams_ls[[i]] <- out
+}
+
+close_dams_df<- rbindlist(close_dams_ls)
+ 
+#write_csv(close_dams_df, "D:/Dropbox/projects/rivercolor/out/dams_changing_rivers.csv")
+
+#close_dams_df<- read_csv("D:/Dropbox/projects/rivercolor/out/dams_changing_rivers.csv")
+
+flowline_urban <-read_feather("D:/Dropbox/projects/rivercolor/out/flowline_urban_intersect.feather") %>%
+    mutate(type = ifelse(is.na(LakFrct), "River", "Lake"))
+
+
+close_dams <-  close_dams_df %>%
+  mutate(dist_norm = abs(dist)) %>%
+  group_by(ID) %>%
+  slice(which.min(dist_norm)) %>%
+  ungroup() %>%
+  group_by(trend) %>%  # dam_location
+  mutate(sen_rank_group = percent_rank(sen_norm),
+         sen_cut_group = cut(sen_rank_group, breaks=c(0,0.25,0.5, 0.75, 1.1), include.lowest = T)) %>%
+  ungroup() %>%
+  left_join(stream_cat_grwl %>%
+              distinct(ID, .keep_all=T), by="ID") %>%
+  left_join(flowline_urban, by="ID")
+
+
+close_dams %>%
+  group_by(trend, dam_location, sen_cut_group) %>%
+ # mutate(log_dist = log10(dist_norm)) %>%
+  summarise_at(vars(dist_norm), list(~mean(., na.rm=T), ~median(.,na.rm=T))) 
+
+
+ggplot(close_dams %>% 
+         filter(trend %in% c("Greening", "Yellowing")),
+       aes(x=dist_norm, y=sen_norm, color=trend, shape=dam_location)) +
+  scale_color_manual(values=c("green3", "gold3")) +
+  geom_point(size=1.5, alpha=0.2) +
+  theme_bw() +
+ # scale_color_viridis_c() +
+ # geom_smooth(method="gam", se=F) +
+  #scale_x_log10()+
+  #scale_y_log10() +
+  facet_wrap(~trend+dam_location, scales="free") +
+  ylab("Rate of change (nm/yr)")+
+  xlab("Distance to closest dam (km)")
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/dam_distance_change.png", units="in", width=5,height=4, dpi=300)
+
+
+
+## inter
+hotspot_controls <-  bind_rows(
+  close_dams_df %>%
+  filter(trend %in% c("Greening", "Yellowing")) %>%
+  mutate(dist_norm = abs(dist)) %>%
+  group_by(ID) %>%
+  slice(which.min(dist_norm)) %>%
+  ungroup() %>%
+  mutate(sen_rank_group = percent_rank(sen_norm),
+         sen_cut_group = cut(sen_rank_group, breaks=c(0,0.25,0.5, 0.75, 1.1), include.lowest = T)),
+  
+  close_dams_df %>%
+  filter(trend %in% c("Steady", "Variable")) %>%
+  mutate(dist_norm = abs(dist)) %>%
+  group_by(ID) %>%
+  slice(which.min(dist_norm)) %>%
+  ungroup() %>%
+  mutate(sen_cut_group = trend) ) %>%
+  
+  inner_join(stream_cat_grwl %>%
+              distinct(ID, .keep_all=T), by="ID") %>%
+  inner_join(flowline_urban, by="ID")  %>%
+  #filter(dist_norm >25) %>%
+  group_by(sen_cut_group) %>%
+  summarise(n_quartile = n(),
+         n_tidal = sum(Tidal, na.rm=T),
+         n_close_dams = sum(dist_norm<25, na.rm=T),
+        # n_lake = sum(type=="Lake", na.rm=T),
+         n_urban = sum(urban=="urban", na.rm=T),
+         n_dams_urban = sum(dist_norm<25 & urban=="urban", na.rm=T),
+         n_dams_tidal = sum(dist_norm<25 & Tidal, na.rm=T),
+         n_urban_tidal = sum(urban=="urban"& Tidal, na.rm=T),
+         n_all = sum(Tidal|dist_norm<25|urban=="urban", na.rm=T),
+        n_all_and = sum(Tidal & dist_norm<25 & urban=="urban", na.rm=T)) %>%  #type == "Lake"
+  
+  mutate(Tidal = n_tidal/n_quartile,
+         Next_to_Dam = n_close_dams/n_quartile,
+         #Lake = n_lake/n_quartile,
+         Urban = n_urban/n_quartile,
+         Dam_Urban = n_dams_urban/n_quartile,
+         Dam_Tidal = n_dams_tidal/n_quartile,
+         Urban_Tidal = n_urban_tidal/n_quartile,
+         Combined_and = n_all_and/n_quartile,
+         Combined = n_all/n_quartile) %>%
+  pivot_longer(Tidal:Combined, names_to="var", values_to = "percent" ) %>%
+  arrange(var, sen_cut_group) %>%
+  mutate(sen_quart_num = case_when(
+    sen_cut_group== "[0,0.25]" ~ 0.25,
+    sen_cut_group== "(0.25,0.5]" ~ 0.5,
+    sen_cut_group== "(0.5,0.75]" ~ 0.75,
+    sen_cut_group== "(0.75,1.1]" ~ 1.0
+  )) %>%
+  mutate(Change = as.factor(case_when(
+    sen_cut_group== "[0,0.25]" ~ "Slow (0-25%)",
+    sen_cut_group== "(0.25,0.5]" ~ "Medium (25-50%)",
+    sen_cut_group== "(0.5,0.75]" ~ "Fast (50-75%) ",
+    sen_cut_group== "(0.75,1.1]" ~ "Very fast (75-100%)",
+    sen_cut_group== "Steady" ~ "No change (steady)",
+    sen_cut_group== "Variable" ~ "No change (variable)"
+  ))) %>%
+  mutate(var = ifelse(var=="Combined", "All (Dam|Urban|Tidal)", var)) %>%
+  mutate(var = ifelse(var=="Combined_and", "All (Dam&Urban&Tidal)", var)) %>%
+  mutate(var = ifelse(var=="Next_to_Dam", "Within 25 km of dam", var)) %>%
+  mutate(var = ifelse(var=="Urban", "Flow through urban area", var)) 
+  
+
+hotspot_controls$Change <- factor(hotspot_controls$Change,levels = c("No change (variable)", "No change (steady)", "Slow (0-25%)","Medium (25-50%)","Fast (50-75%) ","Very fast (75-100%)"))
+###
+
+# ggplot(hotspot_controls %>% filter(var %in% c("All (Dam|Urban|Tidal)", "Within 25 km of dam", "Flow through urban area", "Tidal")),
+#        aes(x=(Change), y=percent*100, fill=Change)) +
+#   geom_bar( stat="identity", color="black")+
+#   facet_wrap(~var, scales="free_y") +
+#   theme_bw() +
+#   theme(legend.position = "none",
+#         axis.text.x = element_text(angle = 45, hjust = 1)) +
+#   xlab("Rate of change") +
+#   ylab("% of rivers") +
+#   scale_fill_manual(values = c("white", "white", "grey80", "grey60", "grey40", "grey20"))
+# 
+# #ggsave("D:/Dropbox/projects/rivercolor/figs/hotspot_controls_2.png", units="in", width=6, height=5, dpi=300)
+# 
+# ##
+# ggplot(hotspot_controls %>% filter(var %in% c("All (Dam&Urban&Tidal)", "Dam_Urban", "Dam_Tidal", "Urban_Tidal")),
+#        aes(x=(Change), y=percent*100, fill=Change)) +
+#   geom_bar( stat="identity", color="black")+
+#   facet_wrap(~var, scales="free_y") +
+#   theme_bw() +
+#   theme(legend.position = "none",
+#         axis.text.x = element_text(angle = 45, hjust = 1)) +
+#   xlab("Rate of change") +
+#   ylab("% of rivers") +
+#   scale_fill_manual(values = c("white", "white", "grey80", "grey60", "grey40", "grey20"))
+# 
+# #ggsave("D:/Dropbox/projects/rivercolor/figs/hotspot_controls_AND.png", units="in", width=5,height=4, dpi=300)
+
+## Notes: 
+## Fontenelle dam in WY has wrong lat/long in NID
+
+```
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

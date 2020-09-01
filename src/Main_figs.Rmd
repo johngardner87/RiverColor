@@ -1,0 +1,642 @@
+---
+title: "color_figures"
+author: "John Gardner"
+date: "February 12, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+#knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r data}
+flowline_full <- st_read("D:/GIS/river_networks/nhd_grwl_full_20191002.shp") %>%
+  st_transform(102003)
+
+reservoir <- flowline %>% dplyr::filter(!is.na(LakFrct))
+
+
+dams <- st_read("D:/GIS/Dams/nabd_fish_barriers_2012.shp")  %>%
+  #filter(Year_compl >0) %>%
+  #mutate(Year_divide = ifelse(Year_compl < 1984, "pre", "post")) %>%
+  st_transform(102003) %>%
+  filter(!State %in% c("AK", "HI", "AS", "GU", "PR", "VI")) %>%
+  filter(newX > -125.4 & newY < 49.5)
+
+
+sr_clean_lines <- sr_clean_all %>%
+  left_join(flowline %>%
+              st_set_geometry(NULL) %>%
+              mutate(Type = ifelse(is.na(LakFrct), "River", "Lake")),
+            by="ID")
+
+sr_clean_lines %>%
+     filter(Cloud_Cover < 50) %>%
+      mutate(color = case_when(
+             dw < 495 ~ "blue",
+             dw >= 495 & dw < 560 ~ "green",
+             dw >=560 ~ "yellow"  )) %>%
+  group_by(color) %>%
+  summarise(n=n()) %>%
+  mutate(tot_n=sum(n), frac=n/tot_n)
+
+
+
+```
+
+
+
+```{r fig1, echo=FALSE}
+
+ggplot() +
+  geom_sf(data=usa, aes(geometry=geometry), fill="gray60", color="gray60") +
+  theme_few() +
+  geom_sf(data = flowline_sum, lwd=0.5,
+          aes(color= dw_mode1, geometry=geometry)) +
+  scale_color_viridis(discrete = F, option="D") +
+#  geom_sf(data=reservoir, aes(geometry=geometry),lwd=0.75, color="white") +
+    geom_sf(data=dams %>% filter(COMID %in% flowline_full$COMID), aes(geometry=geometry), size=0.4, color="red") +
+ # geom_sf(data=reservoir, color="blue") +
+  theme(legend.position = c(0.92, 0.25),
+    line = element_blank(), 
+    rect = element_blank(), 
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.background = element_blank(),
+    legend.text = element_text(size=12),
+    legend.title = element_text(size=12)) +
+  labs(color=expression(~lambda[d])) +
+  guides(color = guide_colourbar(barwidth =1, barheight = 4))
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig2b_map_color.tiff", width=5, height=3, units="in", dpi=350)
+
+###
+flowline_hex <- flowline_hex  %>%
+            filter(ID %in% flowline_sum$ID)
+
+ ggplot() +
+  geom_sf(data=usa, aes(geometry=geometry), fill="gray25", color="gray25") +
+ # geom_sf(data=usa, fill="wheat", color="wheat") +
+  theme_few() +
+  geom_sf(data = flowline_hex, lwd=0.5,  aes(geometry=geometry),
+          color=flowline_hex$hex_mode) +
+  theme(   line = element_blank(), 
+    rect = element_blank(), 
+    text = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.background = element_blank())
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig2a_map_dw_2.tiff", width=5, height=3, units="in", dpi=350)
+
+###
+ggplot() +
+  geom_sf(data=usa, aes(geometry=geometry), fill="gray45", color="gray45") +
+ # geom_sf(data=usa, fill="wheat", color="wheat") +
+  theme_few() +
+  geom_sf(data = flowline_hex, lwd=0.5,  aes(geometry=geometry),
+          color=flowline_hex$hex_mode) +
+  theme(   line = element_blank(), 
+    rect = element_blank(), 
+    text = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.background = element_blank())
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig2a_map_dw_light.tiff", width=5, height=3, units="in", dpi=350)
+
+###
+sum_mean_sr <- sr_clean_v2 %>%
+  group_by(ID) %>%
+  summarise(mean_SR_mean =mean(mean_SR, na.rm=T))
+
+flowline_sr <- flowline_sum %>%
+  left_join(sum_mean_sr, by="ID")
+
+ggplot() +
+  geom_sf(data=usa, aes(geometry=geometry), fill="gray45", color="gray45") +
+ # geom_sf(data=usa, fill="wheat", color="wheat") +
+  theme_few() +
+  geom_sf(data = flowline_sr, lwd=0.5,  aes(geometry=geometry, color=mean_SR_mean*0.0001)) +
+  scale_color_viridis_c()+
+  theme(legend.position = c(0.92, 0.25),
+    line = element_blank(), 
+    rect = element_blank(), 
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.background = element_blank(),
+    legend.text = element_text(size=12),
+    legend.title = element_text(size=12)) +
+  labs(color=expression(~R[s])) +
+  guides(color = guide_colourbar(barwidth =1, barheight = 4))
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig2a_map_RS.tiff", width=5, height=3, units="in", dpi=350)
+
+
+ggplot(sr_clean_v2) +
+  geom_density(aes(mean_SR*0.0001), lwd=1.1) +
+  xlab(expression(~R[s])) +
+  ylab("Density") +
+  #geom_hline(yintercept = 0, color="white", lwd=1.0) +
+  scale_x_continuous(breaks = c(0,0.1, 0.2)) +
+  theme_bw() +
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=12),
+        plot.background = element_blank())
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig2_RS_hist_all.tiff", width=2.5, height=2.5, units="in", dpi=300)
+
+
+###
+ggplot(sr_clean_lines) +
+  geom_density(aes(dw), lwd=1.1) +
+  xlim(450, 625) +
+  xlab(expression(~lambda[d])) +
+  ylab("Density") +
+  theme_bw() +
+  theme(axis.text = element_text(size=12),
+        axis.title = element_text(size=12))
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig2_hist_all.tiff", width=2.5, height=2.5, units="in", dpi=300)
+
+###
+ggplot(sr_clean_lines) +
+  geom_density(aes(dw, linetype=Type), lwd=1.1, alpha=0.5) +
+  xlim(450, 625) +
+  xlab(expression(~lambda[d])) +
+  ylab("Density") +
+  theme_bw() +
+  theme(legend.position = c(0.26, 0.8),
+        legend.title = element_blank(),
+        legend.background  = element_rect(color="black"),
+        legend.text = element_text(size = 10),
+        axis.text = element_text(size=12),
+        axis.title = element_text(size=12))
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig2_hist_river_lake.tiff", width=2.5, height=2.5, units="in", dpi=300)
+
+###
+
+```
+
+
+```{r fig2_seasonal}
+
+library(gridExtra)
+library(scales)
+library(egg)
+
+## compare river color seasonal clusters with flow
+
+##
+flow_prop_sum <- read_csv("D:/Dropbox/projects/riverTSS/out/flow_stack_monthly_prop_sum.csv")
+
+##
+COMID_ID<- read_csv("D:/Dropbox/projects/riverTSS/out/COMID_ID.csv")
+
+##
+#cluster_3_centroid <-
+#cluster_3_data <-
+#clust_3 >-
+
+##
+flow_prop_sum <- flow_prop_sum %>% 
+  left_join(COMID_ID, by="COMID") %>%
+  left_join(clust_3, by="ID") %>%
+   mutate(pattern = case_when(
+   cluster_3 == 1 ~ "Summer red-shift",
+    cluster_3 == 2 ~ "Spring red-shift",
+     cluster_3 == 3 ~ "Aseasonal"))
+
+## 
+flow_prop_sum %>%
+  group_by(cluster_3) %>%
+  summarise(n= length(unique(site_no)))
+
+##
+seasonal_color_flow <- flow_prop_sum %>%
+  inner_join(cluster_3_centroid, by=c("pattern","month"))
+
+##
+seas_plot2 <-ggplot()+
+  geom_smooth(data=seasonal_color_flow, aes(x=month, y=flow_prop_median), se=T, color="grey30")+
+  facet_wrap(~pattern)+
+  scale_x_continuous(breaks=seq(1,12,1))+
+  scale_y_continuous(labels = scales::number_format(accuracy = 0.01))+
+  theme_bw()+
+  theme(legend.position = "none",
+        panel.grid.major.y = element_blank(),
+        axis.text.x = element_text(size=8),
+        panel.grid.minor = element_blank(),
+       plot.margin=unit(c(-0.1, 1, 1, 1), "cm"))+
+  xlab("Month")+
+  ylab("Fraction annual flow")
+
+##
+seas_plot1<-ggplot() +
+  stat_smooth(data=cluster_3_data, aes(x=month, y=zscore, group=ID), geom="line", alpha=0.1, fullrange=F, n=20, se=F,  color="grey")+
+  geom_line(data=seasonal_color_flow, aes(x=month, y=zscore, color=pattern), lwd=1.2)+
+  scale_color_manual(values = c("springgreen3", "darkmagenta", "darkorange1" )) +
+  facet_wrap(~pattern) +
+  xlab("") +
+  ylab(expression(Zscore~lambda[d]))+
+  scale_x_continuous(breaks=seq(1,12,1), name = "") +
+  theme_bw() +
+  theme(legend.position = "none",
+        axis.text.x = element_blank(),
+        panel.grid.major.y = element_blank(), 
+        panel.grid.minor = element_blank(),
+        plot.margin=unit(c(1, 1, -0.5, 1.265), "cm"))
+
+
+tiff(file="D:/Dropbox/projects/rivercolor/figs/fig3_seasonal_color_flow_alldata.tiff", units="in", width=6, height=4, res=300)
+
+grid.arrange(seas_plot1, seas_plot2, ncol=1)
+
+dev.off()
+
+####
+ggplot() +
+  geom_sf(data=usa, aes(geometry= geometry), fill="gray90", color="gray90") +
+  theme_few() +
+  geom_sf(data = flowline_clust %>%
+              mutate(cluster_3 = case_when(
+               cluster_3 ==1 ~ "Summer red-shift",
+               cluster_3 ==2 ~ "Spring red-shift",
+               cluster_3 ==3 ~ "Aseasonal",
+               is.na(cluster_3)  ~ "Not enough data")) %>%
+            filter(cluster_3 != "Not enough data"), 
+          aes(color=as.factor(cluster_3), geometry=geometry), lwd=0.75) +
+  scale_color_manual(values = c("springgreen3", "darkmagenta", "darkorange1" )) +
+
+  theme(legend.position = c(0.15, 0.2),
+    line = element_blank(), 
+    rect = element_blank(), 
+    axis.text = element_blank(),
+    legend.title = element_blank(),
+      axis.ticks = element_blank(),
+    plot.background = element_blank())
+
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig3_seasonal_patterns_orange-pup-green.tiff", width=6, height=4, units="in", dpi=300)
+
+
+```
+
+
+
+
+```{r}
+
+trend_all_yr <- read_feather("D:/Dropbox/projects/rivercolor/out/trends_annual_all.feather")
+
+sum_ID_year <- read_feather("D:/Dropbox/projects/rivercolor/out/sr_sum_ID_year.feather")
+
+##
+flowline_test <- flowline %>%
+  inner_join(trend_all_yr %>% filter(variable=="dw_mean"),
+            by="ID") %>%
+  inner_join(sum_ID, by="ID") %>%
+  filter(!ID %in% flag_reaches$ID) %>%
+  mutate(bimodal = ifelse(dw_bi_coef > 0.54 & is.finite(dw_antimode) & !is.na(dw_mode2), "bimodal", "unimodal")) %>%
+  mutate(type = ifelse(is.na(LakFrct), "River", "Lake")) %>%
+  mutate(constant_color = case_when(
+         green_frac == 1 ~"green",
+         yellow_frac == 1 ~ "yellow",
+         blue_frac ==1 ~ "blue",
+         TRUE ~ "variable"
+         )) %>%
+   mutate(trend = ifelse(trend=="none" & (dw_sd/dw_mean) <=0.01, "steady", trend )) %>%
+   mutate(trend = ifelse(trend=="none" & (dw_sd/dw_mean) >0.01, "variable", trend )) %>%
+  mutate( trend = case_when(
+    trend == "decrease" ~"Blue-shifted",
+    trend == "increase" ~ "Red-shifted",
+    trend == "steady" ~"Steady",
+    trend == "variable" ~ "Variable"
+  )) %>%
+  mutate(cv_sum = dw_sd/dw_mean) %>%
+  group_by(trend)  %>%
+  mutate(sen_norm = abs(sen),
+         sen_rank = percent_rank(sen_norm),
+        sen_quart= cut(sen_rank, breaks = seq(0,1, by=0.25))) %>%
+  ungroup()
+
+##
+flowline_test %>%
+  st_set_geometry(NULL) %>%
+  #mutate(total_length = sum(LENGTHK)) %>%
+  group_by(trend) %>%
+  summarise(count =n(), sum_length = sum(LENGTHKM_), slope_max = max(sen), slope_min=min(sen), slope_med=median(sen), slope_mean=mean(sen)) %>%
+  mutate(total_count = sum(count),
+         total_length = sum(sum_length),
+         perc = count/total_count,
+         perc_length = sum_length/total_length) %>%
+  mutate(trend_analysis="long_term") 
+
+##
+flowline_test %>%
+  st_set_geometry(NULL) %>%
+  #mutate(total_length = sum(LENGTHK)) %>%
+  group_by(type, trend) %>%
+  summarise(count =n(), sum_length = sum(LENGTHKM_), slope_max = max(sen), slope_min=min(sen), slope_med=median(sen), slope_mean=mean(sen)) %>%
+  mutate(total_count = sum(count),
+         total_length = sum(sum_length),
+         perc = count/total_count,
+         perc_length = sum_length/total_length) %>%
+  mutate(trend_analysis="long_term") 
+
+#mapview( flowline %>% filter(ID ==26739), color="blue", lwd=5)
+
+##
+trend_lines <- flowline_test %>% 
+          filter(sen_rank>=0.91) %>%
+          filter(trend %in% c("Blue-shifted", "Red-shifted")) %>%
+  st_point_on_surface()
+
+
+trend_lines %>%
+  st_set_geometry(NULL) %>%
+  group_by(trend) %>%
+  summarise(count=n())
+
+# ggplot(flowline_test %>% 
+#          st_set_geometry(NULL) %>%
+#          filter(trend %in% c("Greening", "Yellowing"))) +
+#   geom_density(aes(sen_norm, color=type )) +
+#   #scale_x_log10() +
+#   facet_wrap(~trend, scales="free") +
+#   theme_bw() +
+#   xlab("rate change (nm/yr)")
+# 
+# ggsave("figs/color_trend_river_lake.png", units="in", width=6, height=3, dpi=300)
+# ###
+# ggplot(flowline_test %>% 
+#          st_set_geometry(NULL) %>%
+#          filter(trend %in% c("Greening", "Yellowing"))) +
+#   geom_density(aes(sen_norm, color=as.factor(Tidal) )) +
+#   #scale_x_log10() +
+#   facet_wrap(~trend, scales="free") +
+#   theme_bw() +
+#   xlab("rate change (nm/yr)")
+
+###
+ggplot()+
+  geom_sf(data=usa, fill="white", color="black") +
+  geom_sf(data=flowline_test, color="grey")+
+  geom_sf(data= trend_lines, aes(size=sen_norm, color=trend), show.legend = 'point', alpha=0.6) +
+  scale_color_manual(values=c("green3", "gold2")) +
+  labs(color="", size="Rate (nm/yr)") +
+ # guides(color = guide_legend(override.aes = list(size = 0.5)))
+
+  theme(legend.position = c(0.94, 0.29),
+         legend.text = element_text(size=8),
+         legend.title = element_text(size=8),
+    line = element_blank(), 
+    rect = element_blank(), 
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    plot.background = element_blank())
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig4_color_trend_hotspots_rv.tiff", units="in", width=5, height=3, dpi=300)
+
+# 10 % change hotspots in or near lakes/reserovirs, coasts, cities, mining?
+mapview(flowline_test %>% 
+          filter(sen_rank>=0.91) %>%
+          filter(trend %in% c("Greening", "Yellowing")), 
+        zcol="trend", cex="sen", lwd=3)
+
+###
+
+ggplot() +
+  geom_sf(data=usa, aes(geometry=geometry), fill="gray25", color="gray25") +
+  theme_few() +
+  geom_sf(data = flowline_test %>%
+            mutate(sen_plot = ifelse(sig =="not", NA, sen)),
+          aes(color= sen_plot, geometry=geometry), lwd=1) +
+  scale_color_gradient2(midpoint=0, low = "green3", mid = "white",
+                            high = "goldenrod3") +
+  #scale_color_viridis(discrete = T) +
+ # geom_sf(data=reservoir, color="blue") +
+  theme(legend.position = c(0.92, 0.25),
+    line = element_blank(), 
+    rect = element_blank(), 
+    axis.text = element_blank(),
+    legend.title = element_blank(),
+      axis.ticks = element_blank(),
+    plot.background = element_blank())
+
+ggsave("figs/figSI_color_sen_slope.tiff", width=6, height=4, units="in", dpi=300)
+
+
+
+###
+ggplot() +
+  geom_sf(data=usa, aes(geometry=geometry), fill="gray90", color="gray90") +
+  theme_few() +
+  geom_sf(data = flowline_test, lwd=0.5, 
+          aes(color= trend, geometry=geometry)) +
+  scale_color_manual(values = c("green3", "gold2", "darkmagenta","gray40" )) +
+  #scale_color_viridis(discrete = T) +
+ # geom_sf(data=reservoir, color="blue") +
+  theme(legend.position = c(0.94, 0.23),
+    line = element_blank(), 
+    rect = element_blank(), 
+    axis.text = element_blank(),
+    legend.text = element_text(size=8),
+    legend.title = element_blank(),
+    axis.ticks = element_blank(),
+    plot.background = element_blank()) +
+   guides(color = guide_legend(override.aes = list(size = 0.5)))
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig4_map_trends_rv.tiff", width=5, height=3, units="in", dpi=300)
+
+#ID == 26739 ~ "DMF Brazos",
+#ID == 29850 ~ "Lake Mead",
+# ID == 29793 ~ "Colorado",
+#ID == 24710 ~ "Canadian"
+
+ggplot() +
+geom_point(data=sr_clean_all %>% filter(ID %in% c(24710)) %>%
+             left_join(flowline %>%
+                         dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID"), 
+             aes(x=date, y=dw), color="grey", alpha=0.5,  stroke = 0, shape=16) +
+  geom_point(data=sum_ID_year %>% filter(ID %in% c(24710)) %>%
+               left_join(flowline %>%
+                        dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID"), 
+              aes(x=as.Date(paste(as.character(year), 6, 1, sep = "-")), y=dw_mean), color="darkmagenta" , size=1.5)  +
+  scale_x_date(breaks = as.Date(c("1985-01-01", "2000-01-01", "2015-01-01")),
+               date_labels = "%Y") +
+  geom_hline(yintercept = 560) +
+  theme_few() +
+  ylab(expression(lambda~(nm))) +
+  xlab("") +
+  theme(legend.position= "none",
+       # strip.text = element_blank(),
+        axis.title= element_text(size=10),
+        axis.text= element_text(size=10),
+       title = element_text(size=10))
+  #labs(title = "Steady")
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig4_ts_steady_purple_rv.tiff", width=2.5, height=1.5, units="in", dpi=300)
+
+
+ggplot() +
+geom_point(data=sr_clean_all %>% filter(ID %in% c(29793)) %>%
+             filter(dw <698 & dw >400) %>%
+             left_join(flowline %>%
+                         dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID"), 
+             aes(x=date, y=dw), color="grey", alpha=0.5,  stroke = 0, shape=16) +
+  geom_point(data=sum_ID_year %>% filter(ID %in% c(29793)) %>%
+               left_join(flowline %>%
+                        dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID"), 
+              aes(x=as.Date(paste(as.character(year), 6, 1, sep = "-")), y=dw_mean), color="grey40" , size=1.5)  +
+  scale_x_date(breaks = as.Date(c("1985-01-01", "2000-01-01", "2015-01-01")),
+               date_labels = "%Y") +
+  geom_hline(yintercept = 560) +
+  theme_few() +
+  ylab(expression(lambda~(nm))) +
+  xlab("") +
+  theme(legend.position= "none",
+       # strip.text = element_blank(),
+        axis.title= element_text(size=10),
+        axis.text= element_text(size=10),
+       title = element_text(size=10)) #+
+ # labs(title = "Variable")
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig4_ts_variable_rv.tiff", width=2.5, height=1.5, units="in", dpi=300)
+
+ggplot() +
+geom_point(data=sr_clean_all %>% filter(ID %in% c(29850)) %>%
+             left_join(flowline %>%
+                         dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID"), 
+             aes(x=date, y=dw), color="grey", alpha=0.5,  stroke = 0, shape=16) +
+  geom_point(data=sum_ID_year %>% filter(ID %in% c(29850)) %>%
+               left_join(flowline %>%
+                        dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID"), 
+              aes(x=as.Date(paste(as.character(year), 6, 1, sep = "-")), y=dw_mean), color="gold2" , size=1.5)  +
+  scale_x_date(breaks = as.Date(c("1985-01-01", "2000-01-01", "2015-01-01")),
+               date_labels = "%Y") +
+  geom_hline(yintercept = 560) +
+  theme_few() +
+  ylab(expression(lambda~(nm))) +
+  xlab("") +
+  theme(legend.position= "none",
+       # strip.text = element_blank(),
+        axis.title= element_text(size=10),
+        axis.text= element_text(size=10),
+       title = element_text(size=10)) #+
+  #labs(title = "Yellowing")
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig4_ts_yellowing_rv.tiff", width=2.5, height=1.5, units="in", dpi=300)
+
+
+               
+ggplot() +
+geom_point(data=sr_clean_all %>% filter(ID %in% c(26739)) %>%
+             left_join(flowline %>%
+                         dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID"), 
+             aes(x=date, y=dw), color="grey", alpha=0.5,  stroke = 0, shape=16) +
+  geom_point(data=sum_ID_year %>% filter(ID %in% c(26739)) %>%
+               left_join(flowline %>%
+                        dplyr::select(ID, GNIS_NA) %>%
+                         st_set_geometry(NULL), by="ID"), 
+              aes(x=as.Date(paste(as.character(year), 6, 1, sep = "-")), y=dw_mean), color="green3" , size=1.5)  +
+  scale_x_date(breaks = as.Date(c("1990-01-01", "2000-01-01", "2015-01-01")),
+               date_labels = "%Y") +
+  geom_hline(yintercept = 560) +
+  theme_few() +
+  ylab(expression(lambda~(nm))) +
+  xlab("") +
+  theme(legend.position= "none",
+       # strip.text = element_blank(),
+        axis.title= element_text(size=10),
+        axis.text= element_text(size=10),
+       title = element_text(size=10)) #+
+ # labs(title = "Greening")
+
+ggsave("D:/Dropbox/projects/rivercolor/figs/fig4_ts_greening_rv.tiff", width=2.5, height=1.5, units="in", dpi=300)
+
+
+
+```
+
+
+
+
+
+
+```{r}
+## test what controls hotspots of yellowing and greening (distance from dams compare to sen slope rank),land use of immediate catchment, pop, 
+stream_cat_grwl <- read_feather("D:/Dropbox/projects/riverTSS/out/StreamCat_grwl.feather") 
+
+# join stream cat, check rates by pop density
+
+stream_cat_grwl <- stream_cat_grwl %>%
+  left_join(flowline_test %>%
+              st_set_geometry(NULL), by="ID")
+
+#
+ggplot(stream_cat_grwl%>% 
+         filter(trend %in% c("Greening", "Yellowing"))) +
+  geom_point(aes(x=MineDensCat , y=sen_norm, color=type )) +
+  scale_y_log10() +
+  facet_wrap(~trend, scales="free") +
+  theme_bw() 
+ # xlab("rate change (nm/yr)")
+
+ggplot(stream_cat_grwl%>% 
+         filter(trend %in% c("Greening", "Yellowing"))) +
+  geom_density(aes(sen_norm, color=as.factor(Tidal) )) +
+ # scale_y_log10() +
+  facet_wrap(~trend, scales="free") +
+  theme_bw() 
+
+
+#SuperfundDensCat, MineDensCat, NABD_DensWs (greening), # PctAg2006Slp10Ws (yellowing)
+# NABD_NrmStorWs (yellowing), CoalMineDensWs, change_BLSWs
+# Tidal more likely to have high greening
+
+
+
+
+```
+
+
+
+```{r}
+
+
+```
+
+
+
+
+```{r}
+
+ggplot() +
+  geom_sf(data=usa, aes(geometry= geometry), fill="gray90", color="gray90") +
+  theme_few() +
+  geom_sf(data = flowline_sum, aes(color=bright_tot_mean))+
+  scale_color_viridis_c()
+
+
+mapview(flowline_sum %>%
+            filter(StrmOrd <7) %>%
+            st_transform(4326), zcol="bright_tot_mean")
+
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

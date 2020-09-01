@@ -1,0 +1,537 @@
+---
+title: "1_data_load"
+author: "John Gardner"
+date: "October 3, 2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+
+library(stringr)
+library(tidyverse)
+library(feather)
+library(viridis)
+library(knitr)
+library(magrittr)
+library(doParallel)
+library(purrr)
+library(data.table)
+library(readr)
+library(lubridate)
+library(modeest)
+library(ggthemes)
+library(furrr) 
+library(modes)
+library(dtw)
+library(TSclust)
+library(dtwclust)
+library(zoo)
+
+library(sf)
+library(rgdal)
+library(maps)
+library(mapview)
+
+knitr::opts_chunk$set(echo = FALSE)
+
+```
+
+
+```{r load, echo=F}
+
+sr_clean_all <- read_feather( "D:/Dropbox/projects/rivercolor/out/riverSR_usa_v1.1.feather")
+
+# Calculate static summary stats for each reach: elevation, path, row, n_years, count, proportion 5,7,8
+sr_constants_ID <- sr_clean_all %>%
+  dplyr::select(ID, elevation, max_year, min_year, n_years, count, path, row) %>%
+  group_by(ID) %>%
+  mutate(paths = list(unique(path)),
+         rows = list(unique(row))) %>%
+  ungroup() %>%
+  dplyr::select(-path, -row) %>%
+  distinct(ID, .keep_all = T) %>%
+  arrange(ID) %>%
+  left_join(sr_clean_all %>%
+    select(ID, sat, count) %>%
+    group_by(ID, sat, count) %>%
+    summarise(count_sat = n()) %>%
+    mutate(sat_frac = count_sat/count) %>%
+    select(ID, sat, sat_frac) %>%
+    spread(key=sat, value=sat_frac)  %>%
+    dplyr::rename_at(vars(c("LT05", "LE07", "LC08")), paste0, "_frac"),
+     by = "ID") %>%
+  ungroup() %>%
+  mutate(paths = as.character(paths)) %>%
+  mutate(rows = as.character(rows)) 
+  
+# Calculate modal color and other summary stats for each reach
+sum_ID <- sr_clean_all %>%
+  filter(dw > 400, dw < 699) %>%
+  filter(count > 10) %>%
+  filter(Cloud_Cover < 50) %>%
+  dplyr::select(ID, sat, Cloud_Cover, cScore, pixelCount, zenith, azimuth, red_raw:dw) %>%
+  group_by(ID) %>%
+  nest() %>%
+  mutate(m= purrr::map(data, modesum)) %>%
+  mutate(frac = purrr::map(data, colorFracSat)) %>%
+  unnest(m) %>%
+  unnest(frac)  %>%
+  dplyr::select(-data) %>%
+  inner_join(sr_constants_ID, by = "ID") %>%
+  ungroup() %>%
+  mutate(paths = as.character(paths),
+         rows = as.character(rows))
+
+#write_csv(sr_constants_ID, "D:/Dropbox/projects/rivercolor/out/sr_conus_constants.csv")
+
+#write_feather(sum_ID, "D:/Dropbox/projects/rivercolor/out/sr_sum_ID.feather")
+
+#sum_ID <- read_feather("D:/Dropbox/projects/rivercolor/out/sr_sum_ID.feather")
+```
+
+
+```{r annual_summary, message=F, echo=F}
+
+#calculate annual summary statistics
+sum_ID_year <- sr_clean_all %>%
+   filter(dw > 400, dw < 700) %>%
+   ## sometimes 2 per day on edge of scenes
+   #distinct(ID, date, .keep_all = T)
+   #dplyr::select(ID, decade, sat, dw) %>%
+   dplyr::select(ID,year, season, n_years, sat, Cloud_Cover, pixelCount, red:dw) %>%
+   group_by(ID, year) %>%
+   mutate(count_year = n())  %>%
+   mutate(count_unique_seas = length(unique(season))) %>%
+   filter(count_year > 4 & count_unique_seas >1 & n_years > 15) %>%
+   dplyr::select(-season, -n_years, -sat) %>%
+   dplyr::summarise_all( list(~median(.), ~mean(.), ~sd(.),
+                              ~max(.), ~min(.))) %>%
+   dplyr::select(-count_year_mean, -count_year_sd) %>%
+   rename(count_year = count_year_median)
+
+# check out some reaches
+ggplot(sum_ID_year %>% filter(ID %in% c(1, 100, 10000, 16000, 20000, 30000))) +
+   geom_point(aes(x=year, y=dw_mean, color=count_year)) +
+   facet_wrap(~ID )
+
+#write_feather(sum_ID_year, "D:/Dropbox/projects/rivercolor/out/sr_sum_ID_year.feather")
+```
+
+
+```{r monthly_summary}
+
+# calcualte monthly summary statistics
+plan(multiprocess)
+
+sum_ID_month <- sr_clean_all %>%
+  filter(dw >= 400, dw < 699) %>%
+  filter(count > 50 & n_years > 10) %>%
+  dplyr::select(ID, month, sat, Cloud_Cover, pixelCount,dw,
+                ndssi, hue, saturation, bright, bright_tot,
+                fai, BR_G , NS_NR, N_S, N_R,  ndvi) %>%
+  group_by(ID, month) %>%
+  mutate(count_month = n())  %>%
+  filter(count_month >= 6) %>%
+  nest() %>%
+  mutate(m= furrr::future_map(data, modesum)) %>%
+  mutate(frac = furrr::future_map(data, colorFracSat)) %>%
+  unnest(m) %>%
+  unnest(frac) %>%
+  dplyr::select(-data) %>%
+  dplyr::select(-count_month_mean, -count_month_sd) %>%
+  rename(count_month = count_month_median) %>%
+  ungroup()
+
+plan(sequential)
+
+#write_feather(sum_ID_month, "D:/Dropbox/projects/rivercolor/out/sr_sum_ID_month.feather")
+
+#sum_ID_month <- read_feather( "D:/Dropbox/projects/rivercolor/out/sr_sum_ID_month.feather")
+
+```
+
+
+```{r annual_trend}
+
+# flowline <- st_read('D:/GIS/river_networks/nhd_grwl_collapse_20190429.shp') %>%
+#   st_transform(2163) %>%
+#   st_simplify(dTolerance=5000)
+
+# filter annual data 
+nested_year <- sum_ID_year %>%
+  ungroup() %>%
+  filter(!is.na(dw_mean)) %>%
+ # mutate_at(vars(high_frac:yellow_LC08_frac), ~replace_na(., 0) ) %>%
+  group_by(ID) %>%
+  mutate(unique_years = n()) %>%
+  filter(unique_years > 14) %>%
+  nest() 
+
+# select variables to look for annual trends
+variables_yr <- sum_ID_year %>%
+  ungroup() %>%
+  dplyr::select(dw_mean, dw_median, dw_sd, ndssi_mean,  ndssi_median, ndssi_sd, fai_mean, fai_median, fai_sd, BR_G_mean, BR_G_median, BR_G_sd) %>%
+  names(.) 
+
+# set up list for output
+trend_list_yr <- list()
+
+for(i in 1:length(variables_yr)) {
+  
+trend_year <- nested_year %>%
+  mutate(t = map2(data, variables_yr[i], mkmk)) %>%
+  unnest(t) %>%
+  dplyr::select(-data) %>%
+  mutate(variable = variables_yr[i]) %>%
+  mutate(sig = ifelse(p < 0.1, "sig", "not")) %>%
+  mutate(sig_0.5 = ifelse(p < 0.05, "sig", "not")) %>%
+  mutate(dir = case_when(
+    tau > 0 ~"increase",
+    tau < 0 ~ "decrease",
+    tau ==0 ~ "none"
+  )) %>%
+ mutate(trend = case_when(
+    tau > 0 & sig =="sig" ~"increase",
+    tau < 0 & sig =="sig" ~ "decrease",
+    TRUE ~ "none"
+  )) %>%
+   mutate(trend_0.5 = case_when(
+    tau > 0 & sig_0.5 =="sig" ~"increase",
+    tau < 0 & sig_0.5 =="sig" ~ "decrease",
+    TRUE ~ "none"
+  )) %>%
+  ungroup()
+
+trend_list_yr[[i]] <- trend_year
+}
+
+# combine lists
+trend_all_yr <- bind_rows(trend_list_yr)
+
+#write_feather(trend_all_yr, path="D:/Dropbox/projects/rivercolor/out/trends_annual_all.feather")
+  
+trend_all_yr %>% filter(variable=="dw_mean") %>%
+  group_by(trend_0.5) %>%
+  summarise(n=n())
+
+flowline_test <- flowline %>%
+  left_join(trend_all_yr %>% filter(variable=="dw_mean"),
+            by="ID")
+
+ggplot() +
+  geom_sf(data=usa, fill="gray90", color="gray90") +
+  theme_few() +
+  geom_sf(data = flowline_test, aes(color=trend)) +
+  #scale_color_manual(values = c("green3", "gold", "dodgerblue", "gray20")) +
+  
+  theme(legend.position = c(0.92, 0.25),
+    line = element_blank(), 
+    rect = element_blank(), 
+    axis.text = element_blank(),
+    legend.title = element_blank())
+
+
+```
+
+
+```{r monthly_cluster}
+
+
+sum_ID_month <-read_feather("D:/Dropbox/projects/rivercolor/out/sr_sum_ID_month.feather")
+
+# add columns of number of months with data and which months
+sum_ID_month <- sum_ID_month %>%
+  group_by(ID) %>%
+  arrange(month, .by_group=T) %>%
+  mutate(num_month = n()) %>%
+  mutate(month_chr = str_pad(as.character(month), 2, pad="0" )) %>%
+  mutate(name_month =paste0(month_chr, collapse="-")) %>%
+  ungroup()
+
+# find ID of rivers with 12 months of mean monthly dw
+ID_months <- sum_ID_month %>%
+  dplyr::filter(num_month > 11) %>%
+  distinct(ID) %>%
+  pull(ID)
+
+# function to znormalize, can also specificy preproc=zscore
+znorm <- function(ts){
+  ts.mean <- mean(ts)
+  ts.dev <- sd(ts)
+  (ts - ts.mean)/ts.dev
+}
+
+# create matrix where each row is site, and each column is mean monthly dw, no missing data allowed
+dtw_mat <- sum_ID_month %>%
+  filter(ID %in% ID_months) %>%
+  group_by(ID) %>%
+  mutate(dw_z = znorm(dw_mean)) %>%
+  ungroup() %>%
+  dplyr::select(ID, month, dw_z) %>%
+  spread(key=month, value=dw_z) %>%
+  dplyr::select(-ID) %>%
+  #try it first for a subset of sites
+  #sample_n(1000) %>%
+  as.matrix()
+
+# do dynamic time warping with hierachical clustering for 2 to 8 clusters
+cluster_dtw<-tsclust(dtw_mat, type = "h", k = 2L:8L, distance = "dtw_basic",
+                      centroid = dba, control =hierarchical_control(method = "complete"),
+                      preproc = NULL)
+
+# extract the cluster validation indices
+cvi_dw <-sapply(cluster_dtw, cvi, type = "internal") 
+
+cvi_names <-rownames(cvi_dw)
+
+cvi_df <- cvi_dw %>%
+  as_data_frame() %>%
+  cbind( cvi_names) %>%
+  pivot_longer(-cvi_names, names_to="clusters", names_prefix = "V",values_to = "CVI" ) %>%
+  mutate(clusters = as.numeric(clusters) +1) %>%
+  mutate(optimum = case_when(
+    cvi_names=="Sil" ~ "maximize",
+    cvi_names=="SF" ~ "maximize",
+    cvi_names=="CH" ~ "maximize",
+    cvi_names=="DB" ~ "minimize",
+    cvi_names=="DBstar" ~ "minimize",
+    cvi_names=="D" ~ "maximize",
+    cvi_names=="COP" ~ "minimize"
+  ))
+
+ggplot(cvi_df) +
+  geom_line(aes(x=clusters, y=CVI)) +
+  facet_wrap(~cvi_names, scales="free")
+
+# do a final analysis for the desired number of clusters
+cluster_dtw_3 <-tsclust(dtw_mat, type = "h", k = 3L, distance = "dtw_basic", centroid = dba, control =hierarchical_control(method = "complete"), preproc = NULL)
+
+#
+#cluster_3_centroid <- do.call(rbind.data.frame, cluster_dtw_3@centroids)
+
+# 
+clust_3<- data.frame(ID= ID_months, cluster_3= cluster_dtw_3@cluster) 
+
+# 
+cluster_3_centroid <- data.frame(sapply(cluster_dtw_3@centroids,c)) %>%
+  rename(Summer_yellow=1, Spring_yellow=2, Aseasonal=3) %>%
+  mutate(month= row_number()) %>%
+  gather(Summer_yellow:Aseasonal,key="pattern", value="zscore") %>%
+  mutate(cluster_3 = case_when(
+    pattern == "Summer_yellow" ~ 1,
+    pattern == "Spring_yellow" ~2,
+    pattern == "Aseasonal" ~3)) %>%
+  mutate(pattern = case_when(
+    pattern == "Summer_yellow" ~ "Summer red-shift",
+    pattern == "Spring_yellow" ~ "Spring red-shift",
+     pattern == "Aseasonal" ~ "Aseasonal"))
+
+#
+cluster_3_data <-as.data.frame(t(as.matrix(sapply(cluster_dtw_3@datalist, c)))) %>%
+  remove_rownames() %>%
+  mutate(ID = clust_3$ID) %>% 
+  sample_frac(.1) %>%
+  gather(V1:V12, key="month", value="zscore") %>%
+  mutate(month = case_when(
+    month == "V1" ~ 1,
+    month == "V2" ~ 2,
+    month == "V3" ~ 3,
+    month == "V4" ~ 4,
+    month == "V5" ~ 5,
+    month == "V6" ~ 6,
+    month == "V7" ~ 7,
+    month == "V8" ~ 8,
+    month == "V9" ~ 9,
+    month == "V10" ~ 10,
+    month == "V11" ~ 11,
+    month == "V12" ~ 12
+)) %>%
+  left_join(clust_3_new, by="ID") %>%
+  mutate(pattern = case_when(
+    cluster_3 == 1 ~ "Summer red-shift",
+    cluster_3 == 2 ~ "Spring red-shift",
+    cluster_3 == 3 ~ "Aseasonal"))
+
+
+ggplot(cluster_3_data) +
+  geom_smooth(aes(x=month, y=zscore, group=ID), alpha=0.5, fullrange=F, n=20, se=F, color="grey")+
+  facet_wrap(~pattern) +
+  theme_bw()
+
+# sum_ID_month_2 %>%
+#   filter(ID %in% ID_months) %>%
+#   left_join(clust_3_new, by='ID') %>%
+#   
+
+#write_csv(cluster_3_data, "D:/Dropbox/projects/rivercolor/out/cluster_3_data.csv")
+
+#write_csv(cluster_3_centroid, "D:/Dropbox/projects/rivercolor/out/cluster_3_centroid.csv")
+
+
+#saveRDS(cluster_dtw, "D:/Dropbox/projects/rivercolor/out/cluster_median_dtw.rds")
+
+#write_csv(cvi_df, "D:/Dropbox/projects/rivercolor/out/cluster_median_dtw_cvi_long.csv")
+
+#saveRDS(cluster_dtw_3, "D:/Dropbox/projects/rivercolor/out/cluster_median_dtw_3.rds")
+
+### 
+#cvi_df<- read_csv("D:/Dropbox/projects/rivercolor/out/cluster_median_dtw_cvi.csv")
+
+#cluster_dtw <-readRDS("D:/Dropbox/projects/rivercolor/out/cluster_median_dtw.rds")
+
+#cluster_dtw_3<-readRDS("D:/Dropbox/projects/rivercolor/out/cluster_median_dtw_3.rds")
+
+
+
+```
+
+
+
+```{r monthly_cluster_width120}
+
+nhd_width<-read_feather("D:/Dropbox/projects/rivercolor/out/nhd_sword_width.feather")
+
+sum_ID_month <-read_feather("D:/Dropbox/projects/rivercolor/out/sr_sum_ID_month.feather")
+
+# add columns of number of months with data and which months
+sum_ID_month_120 <- sum_ID_month %>%
+  left_join(nhd_width %>%
+              select(ID, width), by="ID") %>%
+  filter(!ID %in% flag_reaches$ID) %>%
+  filter(width >=120) %>%
+  group_by(ID) %>%
+  arrange(month, .by_group=T) %>%
+  mutate(num_month = n()) %>%
+  mutate(month_chr = str_pad(as.character(month), 2, pad="0" )) %>%
+  mutate(name_month =paste0(month_chr, collapse="-")) %>%
+  ungroup()
+
+# find ID of rivers with 12 months of mean monthly dw
+ID_months_120 <- sum_ID_month_120 %>%
+  dplyr::filter(num_month > 11) %>%
+  distinct(ID) %>%
+  pull(ID)
+
+# function to znormalize, can also specificy preproc=zscore
+# znorm <- function(ts){
+#   ts.mean <- mean(ts)
+#   ts.dev <- sd(ts)
+#   (ts - ts.mean)/ts.dev
+# }
+
+# create matrix where each row is site, and each column is mean monthly dw, no missing data allowed
+dtw_mat_120 <- sum_ID_month_120 %>%
+  filter(ID %in% ID_months_120) %>%
+  group_by(ID) %>%
+  ungroup() %>%
+  dplyr::select(ID, month, dw_mean) %>%
+  spread(key=month, value=dw_mean) %>%
+  dplyr::select(-ID) %>%
+  as.matrix()
+
+# do dynamic time warping with hierachical clustering for 2 to 8 clusters
+cluster_dtw_120 <-tsclust(dtw_mat_120, type = "h", k = 2L:10L, distance = "dtw_basic",centroid = dba, control =hierarchical_control(method = "complete"),
+                      preproc = zscore)
+
+# extract the cluster validation indices
+cvi_dw_120 <-sapply(cluster_dtw_120, cvi, type = "internal") 
+
+cvi_names_120 <-rownames(cvi_dw_120)
+
+cvi_df_120 <- cvi_dw_120 %>%
+  as_data_frame() %>%
+  cbind(cvi_names_120) %>%
+  pivot_longer(-cvi_names_120, names_to="clusters", names_prefix = "V",values_to = "CVI" ) %>%
+  mutate(clusters = as.numeric(clusters) +1) %>%
+  mutate(optimum = case_when(
+    cvi_names_120=="Sil" ~ "maximize",
+    cvi_names_120=="SF" ~ "maximize",
+    cvi_names_120=="CH" ~ "maximize",
+    cvi_names_120=="DB" ~ "minimize",
+    cvi_names_120=="DBstar" ~ "minimize",
+    cvi_names_120=="D" ~ "maximize",
+    cvi_names_120=="COP" ~ "minimize"
+  ))
+
+# check cvi and choose optimal clusters
+ggplot(cvi_df_120) +
+  geom_line(aes(x=clusters, y=CVI, color=optimum)) +
+  facet_wrap(~cvi_names_120, scales="free")
+
+##### 3 clusters
+# do a final analysis for the desired number of clusters
+cluster_dtw_120 <-tsclust(dtw_mat_120, type = "h", k = 3L, distance = "dtw_basic", centroid = dba, control =hierarchical_control(method = "complete"), preproc = zscore)
+
+plot(cluster_dtw_120, type = "centroid")
+
+#cluster_120_centroid <- do.call(rbind.data.frame, cluster_dtw_120@centroids)
+
+# 
+clust_120<- data.frame(ID= ID_months_120, cluster= cluster_dtw_120@cluster) 
+
+# 
+cluster_120_centroid <- data.frame(sapply(cluster_dtw_120@centroids,c)) %>%
+  rename(Summer_yellow=1, Spring_yellow=2, Aseasonal=3) %>%
+  mutate(month= row_number()) %>%
+  gather(Summer_yellow:Aseasonal,key="pattern", value="zscore") %>%
+  mutate(cluster = case_when(
+    pattern == "Summer_yellow" ~ 1,
+    pattern == "Spring_yellow" ~2,
+    pattern == "Aseasonal" ~3)) %>%
+  mutate(pattern = case_when(
+    pattern == "Summer_yellow" ~ "Summer red-shift",
+    pattern == "Spring_yellow" ~ "Spring red-shift",
+     pattern == "Aseasonal" ~ "Aseasonal"))
+
+#
+cluster_120_data <-as.data.frame(t(as.matrix(sapply(cluster_dtw_120@datalist, c)))) %>%
+  remove_rownames() %>%
+  mutate(ID = clust_120$ID) %>% 
+  sample_frac(.1) %>%
+  gather(V1:V12, key="month", value="zscore") %>%
+  mutate(month = case_when(
+    month == "V1" ~ 1,
+    month == "V2" ~ 2,
+    month == "V3" ~ 3,
+    month == "V4" ~ 4,
+    month == "V5" ~ 5,
+    month == "V6" ~ 6,
+    month == "V7" ~ 7,
+    month == "V8" ~ 8,
+    month == "V9" ~ 9,
+    month == "V10" ~ 10,
+    month == "V11" ~ 11,
+    month == "V12" ~ 12
+)) %>%
+  left_join(clust_120, by="ID") %>%
+  mutate(pattern = case_when(
+    cluster == 1 ~ "Summer red-shift",
+    cluster == 2 ~ "Spring red-shift",
+    cluster == 3 ~ "Aseasonal"))
+
+
+ggplot(cluster_120_data) +
+  geom_smooth(aes(x=month, y=zscore, group=ID), alpha=0.5, fullrange=F, n=20, se=F, color="grey")+
+  facet_wrap(~pattern) +
+  theme_bw()
+
+# sum_ID_month_2 %>%
+#   filter(ID %in% ID_months) %>%
+#   left_join(clust_3_new, by='ID') %>%
+#   
+
+#saveRDS(cluster_dtw_120, "D:/Dropbox/projects/rivercolor/out/cluster_120.rds")
+
+#write_csv(cvi_df_120, "D:/Dropbox/projects/rivercolor/out/cluster_120_cvi.csv")
+
+#write_csv(cluster_120_data, "D:/Dropbox/projects/rivercolor/out/cluster_120_data.csv")
+
+#write_csv(cluster_120_centroid, "D:/Dropbox/projects/rivercolor/out/cluster_120_centroid.csv")
+
+
+
+
+```
+
+
+
